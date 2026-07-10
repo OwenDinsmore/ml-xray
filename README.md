@@ -51,9 +51,12 @@ model object.
 
 | Stage | Module | What it does |
 | --- | --- | --- |
-| Pre-training | `ml_xray.lint` | Dataset QA: leakage, drift, label noise, duplicates, imbalance, outliers. **(implemented)** |
-| Post-training | `ml_xray.slices` | Error analysis / slice discovery — find where a model underperforms. *(Phase 2, scaffolded)* |
-| Post-training | `ml_xray.embed` | Embedding diff — compare two embedding spaces. *(Phase 3, scaffolded)* |
+| Pre-training | `ml_xray.lint` | Dataset QA: leakage, drift, label noise, duplicates, imbalance, outliers. |
+| Post-training | `ml_xray.slices` | Error analysis / slice discovery — find where a model underperforms. |
+| Post-training | `ml_xray.embed` | Embedding diff — compare two embedding spaces. |
+
+All three modules are implemented, return structured result objects, and emit
+self-contained HTML report sections that `ml-xray report` stitches into one file.
 
 ### `ml_xray.lint` — dataset QA (Phase 1)
 
@@ -77,6 +80,42 @@ row indices where applicable.
   columns.
 - **outliers** — robust-z / IQR numeric outliers, high-null-fraction columns,
   and constant columns.
+
+### `ml_xray.slices` — slice discovery (Phase 2)
+
+Automatically find where a trained model underperforms — e.g. *"accuracy is 0.49
+on `region=EU` (n=632) vs 0.84 overall"*. Continuous features are discretized,
+slices up to `max_depth` conjunctions are enumerated with Apriori-style pruning,
+each is scored and tested for significance with a Benjamini–Hochberg correction
+across all slices tested, and the survivors are ranked by
+`|underperformance| × log(support)`.
+
+```python
+from ml_xray.slices import SliceFinder
+
+report = SliceFinder(metric="auto", max_depth=2, min_support=30).fit(
+    X, y_true, y_pred, y_proba
+).report()
+
+for s in report.slices[:5]:
+    print(s.describe(), s.support, s.metric_value, s.delta, s.p_value)
+```
+
+### `ml_xray.embed` — embedding diff (Phase 3)
+
+Compare two embedding spaces — v1 vs v2, or embeddings over time — to see what
+moved: k-NN Jaccard **neighbor overlap** (local structure), **per-point drift**
+(which items moved), and **cluster stability** via Adjusted Rand Index (global
+structure). Spaces of different dimensionality are aligned with orthogonal
+Procrustes for the projection scatter; the overlap metrics are dimension-free.
+
+```python
+from ml_xray.embed import EmbeddingDiff
+
+report = EmbeddingDiff(k=10).fit(emb_a, emb_b, ids=ids).report()
+print(report.neighbor_overlap, report.cluster_stability)
+print(report.movers[:10])         # ids whose neighborhoods changed most
+```
 
 ## Design principles
 
@@ -105,18 +144,22 @@ pip install "ml-xray[all]"          # everything
 
 ```bash
 ml-xray lint DATA --target y [--split col] [--fail-on error] [--html out.html]
-ml-xray slices PREDS --features cols [--html out.html]        # Phase 2
-ml-xray embed-diff A.npy B.npy [--ids ids.csv] [--html out.html]   # Phase 3
-ml-xray report ...                                            # Phase 4
+ml-xray slices PREDS [--features cols] [--metric auto] [--html out.html]
+ml-xray embed-diff A.npy B.npy [--ids ids.csv] [-k 10] [--html out.html]
+ml-xray report --lint DATA --target y --slices PREDS --embed A.npy B.npy --html out.html
 ```
+
+`PREDS` is a CSV with `y_true,y_pred[,y_proba]` columns plus the feature columns
+to slice on.
 
 ## Roadmap
 
-- **Phase 1 (shipped as v0.1):** `ml_xray.lint` + HTML report + `ml-xray lint`
-  CLI + synthetic-defect tests.
-- **Phase 2:** `ml_xray.slices` + `ml-xray slices`.
-- **Phase 3:** `ml_xray.embed` + `ml-xray embed-diff`.
-- **Phase 4:** unified `ml-xray report` and richer `riskplot` viz backend.
+- **Phase 1 — done:** `ml_xray.lint` + HTML report + `ml-xray lint` CLI.
+- **Phase 2 — done:** `ml_xray.slices` + `ml-xray slices`.
+- **Phase 3 — done:** `ml_xray.embed` + `ml-xray embed-diff`.
+- **Phase 4 — done:** unified `ml-xray report` stitching all sections into one
+  self-contained HTML file, with a matplotlib viz backend (riskplot/plotly
+  polish next).
 
 ## License
 

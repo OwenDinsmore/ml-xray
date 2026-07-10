@@ -172,3 +172,100 @@ def with_outliers_and_nulls(n: int = 500, seed: int = 8) -> Planted:
         rows=sorted(outlier_rows),
         columns=["val", "mostly_null", "constant"],
     )
+
+
+@dataclass
+class PlantedSlice:
+    """Synthetic predictions with a planted underperforming region."""
+
+    X: pd.DataFrame
+    y_true: np.ndarray
+    y_pred: np.ndarray
+    weak_predicate: dict
+    weak_rows: np.ndarray
+
+
+def weak_region_predictions(n: int = 2000, seed: int = 10) -> PlantedSlice:
+    """Predictions that are accurate everywhere except a planted weak region.
+
+    The model is near-perfect except on ``region == "EU"`` (and worst on the
+    younger-tenure part of it), so slice discovery should surface that region.
+    """
+    rng = _rng(seed)
+    region = rng.choice(["EU", "US", "APAC"], size=n, p=[0.3, 0.4, 0.3])
+    tenure = rng.uniform(0, 24, n)
+    y_true = rng.integers(0, 2, n)
+    y_pred = y_true.copy()
+
+    weak = region == "EU"
+    # Corrupt ~55% of predictions inside the weak region only.
+    corrupt = weak & (rng.uniform(size=n) < 0.55)
+    y_pred[corrupt] = 1 - y_pred[corrupt]
+
+    X = pd.DataFrame({"region": region, "tenure": tenure})
+    return PlantedSlice(
+        X=X,
+        y_true=y_true,
+        y_pred=y_pred,
+        weak_predicate={"region": "EU"},
+        weak_rows=np.flatnonzero(weak),
+    )
+
+
+def clean_predictions(n: int = 2000, seed: int = 11) -> PlantedSlice:
+    """Predictions with uniform error and no underperforming region."""
+    rng = _rng(seed)
+    region = rng.choice(["EU", "US", "APAC"], size=n)
+    tenure = rng.uniform(0, 24, n)
+    y_true = rng.integers(0, 2, n)
+    y_pred = y_true.copy()
+    # Uniform 10% error spread everywhere, correlated with no feature.
+    corrupt = rng.uniform(size=n) < 0.1
+    y_pred[corrupt] = 1 - y_pred[corrupt]
+    X = pd.DataFrame({"region": region, "tenure": tenure})
+    return PlantedSlice(
+        X=X, y_true=y_true, y_pred=y_pred, weak_predicate={}, weak_rows=np.empty(0, int)
+    )
+
+
+@dataclass
+class PlantedEmbed:
+    """A pair of embedding spaces with a known relationship."""
+
+    emb_a: np.ndarray
+    emb_b: np.ndarray
+    moved_ids: np.ndarray
+
+
+def clustered_embedding(n: int = 300, d: int = 16, seed: int = 20) -> np.ndarray:
+    """A clustered embedding matrix (well-separated Gaussian blobs)."""
+    rng = _rng(seed)
+    n_clusters = 6
+    centers = rng.normal(0, 8, (n_clusters, d))
+    assign = rng.integers(0, n_clusters, n)
+    return centers[assign] + rng.normal(0, 1, (n, d))
+
+
+def identical_spaces(n: int = 300, seed: int = 20) -> PlantedEmbed:
+    """Two identical spaces (overlap should be ~1)."""
+    a = clustered_embedding(n, seed=seed)
+    return PlantedEmbed(emb_a=a, emb_b=a.copy(), moved_ids=np.empty(0, int))
+
+
+def unrelated_spaces(n: int = 300, d: int = 16, seed: int = 20) -> PlantedEmbed:
+    """Two independent spaces (overlap should be ~0)."""
+    a = clustered_embedding(n, d, seed=seed)
+    b = clustered_embedding(n, d, seed=seed + 999)
+    return PlantedEmbed(emb_a=a, emb_b=b, moved_ids=np.arange(n))
+
+
+def partially_perturbed_spaces(
+    n: int = 300, d: int = 16, moved: int = 30, seed: int = 20
+) -> PlantedEmbed:
+    """Space B equals A except a known subset of points is moved far away."""
+    rng = _rng(seed)
+    a = clustered_embedding(n, d, seed=seed)
+    b = a.copy()
+    moved_ids = rng.choice(n, size=moved, replace=False)
+    b[moved_ids] += rng.normal(0, 12, (moved, d))
+    return PlantedEmbed(emb_a=a, emb_b=b, moved_ids=np.sort(moved_ids))

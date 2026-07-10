@@ -56,11 +56,91 @@ def test_unknown_split_column_errors(tmp_path, capsys):
     assert "not found" in capsys.readouterr().err
 
 
-def test_slices_not_implemented(capsys):
-    assert main(["slices", "preds.csv"]) == 3
-    assert "not implemented" in capsys.readouterr().err
+def _write_preds(path):
+    planted = synthetic.weak_region_predictions()
+    df = planted.X.copy()
+    df["y_true"] = planted.y_true
+    df["y_pred"] = planted.y_pred
+    df.to_csv(path, index=False)
+    return path
 
 
-def test_embed_diff_not_implemented(capsys):
-    assert main(["embed-diff", "a.npy", "b.npy"]) == 3
-    assert "not implemented" in capsys.readouterr().err
+def test_slices_command(tmp_path, capsys):
+    preds = _write_preds(tmp_path / "preds.csv")
+    html = tmp_path / "slices.html"
+    code = main(
+        ["slices", str(preds), "--metric", "accuracy", "--min-support", "50", "--html", str(html)]
+    )
+    assert code == 0
+    out = capsys.readouterr().out
+    assert "underperforming slices" in out
+    assert "region=EU" in out
+    assert html.exists()
+
+
+def test_slices_missing_columns_errors(tmp_path, capsys):
+    (tmp_path / "bad.csv").write_text("a,b\n1,2\n")
+    code = main(["slices", str(tmp_path / "bad.csv")])
+    assert code == 2
+    assert "y_true" in capsys.readouterr().err
+
+
+def test_embed_diff_command(tmp_path, capsys):
+    import numpy as np
+
+    planted = synthetic.partially_perturbed_spaces(n=150, moved=15)
+    np.save(tmp_path / "a.npy", planted.emb_a)
+    np.save(tmp_path / "b.npy", planted.emb_b)
+    html = tmp_path / "embed.html"
+    code = main(
+        [
+            "embed-diff",
+            str(tmp_path / "a.npy"),
+            str(tmp_path / "b.npy"),
+            "-k",
+            "8",
+            "--html",
+            str(html),
+        ]
+    )
+    assert code == 0
+    assert "neighbor_overlap" in capsys.readouterr().out
+    assert html.exists()
+
+
+def test_report_combines_sections(tmp_path):
+    import numpy as np
+
+    lint_csv = _write_csv(synthetic.with_leaked_column(), tmp_path / "data.csv")
+    preds = _write_preds(tmp_path / "preds.csv")
+    planted = synthetic.partially_perturbed_spaces(n=120, moved=12)
+    np.save(tmp_path / "a.npy", planted.emb_a)
+    np.save(tmp_path / "b.npy", planted.emb_b)
+    out = tmp_path / "combined.html"
+    code = main(
+        [
+            "report",
+            "--lint",
+            str(lint_csv),
+            "--target",
+            "y",
+            "--slices",
+            str(preds),
+            "--embed",
+            str(tmp_path / "a.npy"),
+            str(tmp_path / "b.npy"),
+            "--html",
+            str(out),
+        ]
+    )
+    assert code == 0
+    html = out.read_text(encoding="utf-8")
+    assert "Lint findings" in html
+    assert "Underperforming slices" in html
+    assert "Embedding diff" in html
+
+
+def test_report_requires_a_section(tmp_path, capsys):
+    code = main(["report", "--html", str(tmp_path / "x.html")])
+    assert code == 2
+    assert "at least one" in capsys.readouterr().err
