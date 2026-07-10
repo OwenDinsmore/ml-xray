@@ -9,6 +9,8 @@ training. It takes arrays and DataFrames, never model objects, so it drops into
 any stack (scikit-learn, XGBoost, LightGBM, PyTorch, or just a CSV of
 predictions) with zero coupling.
 
+**[→ Project site & showcase](https://owendinsmore.github.io/ml-xray/)** · [GitHub](https://github.com/OwenDinsmore/ml-xray)
+
 ```bash
 pip install ml-xray
 ```
