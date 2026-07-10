@@ -47,24 +47,41 @@ def build_parser() -> argparse.ArgumentParser:
     p_lint.add_argument("--seed", type=int, default=0, help="Seed for stochastic checks.")
     p_lint.set_defaults(func=_cmd_lint)
 
-    # --- slices (Phase 2) -------------------------------------------------
-    p_slices = sub.add_parser("slices", help="Slice discovery / error analysis (Phase 2).")
-    p_slices.add_argument("preds", help="CSV with columns y_true,y_pred[,y_proba].")
+    # --- slices -----------------------------------------------------------
+    p_slices = sub.add_parser("slices", help="Slice discovery / error analysis.")
+    p_slices.add_argument("preds", help="CSV with columns y_true,y_pred[,y_proba] plus features.")
     p_slices.add_argument("--features", default=None, help="Comma-separated feature columns.")
+    p_slices.add_argument("--metric", default="auto", help="f1/accuracy/mse/mae/auto.")
+    p_slices.add_argument("--max-depth", type=int, default=2, help="Max features per slice.")
+    p_slices.add_argument("--min-support", type=int, default=30, help="Min rows per slice.")
+    p_slices.add_argument("--top-k", type=int, default=20, help="Number of slices to report.")
     p_slices.add_argument("--html", default=None, help="Write an HTML report to this path.")
     p_slices.set_defaults(func=_cmd_slices)
 
-    # --- embed-diff (Phase 3) --------------------------------------------
-    p_embed = sub.add_parser("embed-diff", help="Compare two embedding spaces (Phase 3).")
+    # --- embed-diff -------------------------------------------------------
+    p_embed = sub.add_parser("embed-diff", help="Compare two embedding spaces.")
     p_embed.add_argument("a", help="Path to embedding matrix A (.npy).")
     p_embed.add_argument("b", help="Path to embedding matrix B (.npy).")
-    p_embed.add_argument("--ids", default=None, help="CSV of row ids aligning A and B.")
+    p_embed.add_argument("--ids", default=None, help="CSV/TXT of row ids aligning A and B.")
+    p_embed.add_argument("-k", type=int, default=10, help="Neighborhood size for k-NN overlap.")
     p_embed.add_argument("--html", default=None, help="Write an HTML report to this path.")
     p_embed.set_defaults(func=_cmd_embed_diff)
 
-    # --- report (Phase 4) -------------------------------------------------
-    p_report = sub.add_parser("report", help="Combine sections into one report (Phase 4).")
-    p_report.add_argument("--html", default=None, help="Write the combined HTML report here.")
+    # --- report (unified) -------------------------------------------------
+    p_report = sub.add_parser("report", help="Combine lint/slices/embed into one report.")
+    p_report.add_argument("--lint", default=None, help="Dataset CSV/Parquet for the lint section.")
+    p_report.add_argument("--target", default=None, help="Target column for the lint section.")
+    p_report.add_argument("--split", default=None, help="Split column for the lint section.")
+    p_report.add_argument("--slices", default=None, help="Predictions CSV for the slices section.")
+    p_report.add_argument("--features", default=None, help="Comma-separated feature columns.")
+    p_report.add_argument(
+        "--embed",
+        nargs=2,
+        metavar=("A", "B"),
+        default=None,
+        help="Two .npy embedding matrices for the embed section.",
+    )
+    p_report.add_argument("--html", required=True, help="Write the combined HTML report here.")
     p_report.set_defaults(func=_cmd_report)
 
     return parser
@@ -121,28 +138,129 @@ def _cmd_lint(args: argparse.Namespace) -> int:
     return 0
 
 
+def _load_preds(path: str, features: str | None):
+    """Load a predictions CSV into (features_df, y_true, y_pred, y_proba)."""
+    df = _read_table(path)
+    if "y_true" not in df.columns or "y_pred" not in df.columns:
+        raise ValueError("predictions file must contain 'y_true' and 'y_pred' columns")
+    y_true = df["y_true"].to_numpy()
+    y_pred = df["y_pred"].to_numpy()
+    y_proba = df["y_proba"].to_numpy() if "y_proba" in df.columns else None
+    reserved = {"y_true", "y_pred", "y_proba"}
+    if features:
+        cols = [c.strip() for c in features.split(",") if c.strip()]
+    else:
+        cols = [c for c in df.columns if c not in reserved]
+    return df[cols], y_true, y_pred, y_proba
+
+
 def _cmd_slices(args: argparse.Namespace) -> int:
+    from .slices import SliceFinder
+
+    try:
+        X, y_true, y_pred, y_proba = _load_preds(args.preds, args.features)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    finder = SliceFinder(
+        metric=args.metric,
+        max_depth=args.max_depth,
+        min_support=args.min_support,
+        top_k=args.top_k,
+    ).fit(X, y_true, y_pred, y_proba)
+    report = finder.report()
+
     print(
-        "ml-xray slices is not implemented yet (Phase 2). " "See the roadmap in the README.",
-        file=sys.stderr,
+        f"ml-xray slices: {len(report)} underperforming slices "
+        f"(metric={report.metric}, baseline={report.baseline:.4g})"
     )
-    return 3
+    for s in report.slices[:10]:
+        print(
+            f"  {s.describe()}  n={s.support}  {report.metric}={s.metric_value:.3g} "
+            f"(delta {s.delta:+.3g}, p={s.p_value:.3g})"
+        )
+    if args.html:
+        report.to_html(args.html)
+        print(f"wrote HTML report to {args.html}")
+    return 0
+
+
+def _load_ids(path: str | None, n: int):
+    if path is None:
+        return None
+    import pandas as pd
+
+    if path.endswith((".csv", ".parquet")):
+        frame = _read_table(path)
+        return frame.iloc[:, 0].tolist()
+    return pd.read_csv(path, header=None).iloc[:, 0].tolist()
 
 
 def _cmd_embed_diff(args: argparse.Namespace) -> int:
+    import numpy as np
+
+    from .embed import EmbeddingDiff
+
+    a = np.load(args.a)
+    b = np.load(args.b)
+    ids = _load_ids(args.ids, a.shape[0])
+
+    report = EmbeddingDiff(k=args.k).fit(a, b, ids=ids).report()
     print(
-        "ml-xray embed-diff is not implemented yet (Phase 3). " "See the roadmap in the README.",
-        file=sys.stderr,
+        f"ml-xray embed-diff: neighbor_overlap={report.neighbor_overlap:.3f} "
+        f"cluster_stability(ARI)={report.cluster_stability:.3f} "
+        f"mean_drift={float(report.per_point_drift.mean()):.3f}"
     )
-    return 3
+    print("  top movers: " + ", ".join(str(m) for m in report.movers[:10]))
+    if args.html:
+        report.to_html(args.html)
+        print(f"wrote HTML report to {args.html}")
+    return 0
 
 
 def _cmd_report(args: argparse.Namespace) -> int:
-    print(
-        "ml-xray report is not implemented yet (Phase 4). " "See the roadmap in the README.",
-        file=sys.stderr,
-    )
-    return 3
+    from .report import embed_section, lint_section, render_report, slice_section
+
+    sections: list[str] = []
+
+    if args.lint:
+        from .lint import Linter
+
+        df = _read_table(args.lint)
+        split = None
+        if args.split and args.split in df.columns:
+            split = df[args.split]
+            df = df.drop(columns=[args.split])
+        report = Linter(target=args.target).run(df, split=split)
+        sections.append(lint_section(report))
+
+    if args.slices:
+        from .slices import SliceFinder
+
+        X, y_true, y_pred, y_proba = _load_preds(args.slices, args.features)
+        sreport = SliceFinder().fit(X, y_true, y_pred, y_proba).report()
+        sections.append(slice_section(sreport))
+
+    if args.embed:
+        import numpy as np
+
+        from .embed import EmbeddingDiff
+        from .report import _projection_data_uri
+
+        a, b = np.load(args.embed[0]), np.load(args.embed[1])
+        ereport = EmbeddingDiff().fit(a, b).report()
+        sections.append(embed_section(ereport, image=_projection_data_uri(ereport)))
+
+    if not sections:
+        print("error: provide at least one of --lint, --slices, --embed", file=sys.stderr)
+        return 2
+
+    html = render_report(*sections, title="ml-xray — combined report")
+    with open(args.html, "w", encoding="utf-8") as fh:
+        fh.write(html)
+    print(f"wrote combined HTML report to {args.html}")
+    return 0
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -156,8 +274,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     Returns
     -------
     int
-        Process exit code (``0`` success, ``1`` gate failed, ``2`` usage error,
-        ``3`` unimplemented subcommand).
+        Process exit code (``0`` success, ``1`` lint gate failed, ``2`` usage
+        error).
     """
     parser = build_parser()
     args = parser.parse_args(argv)
