@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, "claude/ml-xray-package-spec-9jl6l6"]
   pull_request:
   workflow_dispatch:
 

@@ -5,7 +5,7 @@ name: Deploy site to GitHub Pages
 
 on:
   push:
-    branches: [main]
+    branches: [main, "claude/ml-xray-package-spec-9jl6l6"]
     paths:
       - "site/**"
       - ".github/workflows/pages.yml"
