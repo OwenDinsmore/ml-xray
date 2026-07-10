@@ -1,0 +1,82 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ml-xray"
+version = "0.1.0"
+description = "Framework-agnostic ML model & dataset analysis: dataset linting, slice discovery, and embedding diff."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Owen Dinsmore", email = "ocedinsmore@gmail.com" }]
+keywords = [
+    "machine-learning",
+    "data-quality",
+    "dataset-linting",
+    "data-leakage",
+    "drift-detection",
+    "label-noise",
+    "slice-discovery",
+    "error-analysis",
+    "embeddings",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Typing :: Typed",
+]
+dependencies = [
+    "numpy>=1.23",
+    "pandas>=1.5",
+    "scikit-learn>=1.1",
+    "scipy>=1.9",
+    "jinja2>=3.0",
+]
+
+[project.optional-dependencies]
+embeddings = ["umap-learn>=0.5"]
+viz = ["riskplot", "plotly>=5.0"]
+noise = ["cleanlab>=2.0"]
+all = ["umap-learn>=0.5", "riskplot", "plotly>=5.0", "cleanlab>=2.0"]
+dev = [
+    "pytest>=7.0",
+    "ruff>=0.1",
+    "black>=23.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/OwenDinsmore/ml-xray"
+Repository = "https://github.com/OwenDinsmore/ml-xray"
+Issues = "https://github.com/OwenDinsmore/ml-xray/issues"
+
+[project.scripts]
+ml-xray = "ml_xray.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ml_xray"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "W"]
+ignore = ["B905"]
+
+[tool.black]
+line-length = 100
+target-version = ["py310"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
