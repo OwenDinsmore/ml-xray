@@ -82,6 +82,9 @@ row indices where applicable.
   columns.
 - **outliers** — robust-z / IQR numeric outliers, high-null-fraction columns,
   and constant columns.
+- **temporal_leakage** — given a time column (`Linter.run(..., time="ts")` or
+  `--time`), flags training rows dated after a later split (future leaking into
+  train) and features that are near-monotonic proxies for time.
 
 ### `ml_xray.slices` — slice discovery (Phase 2)
 
@@ -206,13 +209,19 @@ pip install "ml-xray[all]"          # everything
 ## CLI
 
 ```bash
-ml-xray lint DATA --target y [--split col] [--config ml-xray.toml] \
+ml-xray lint DATA --target y [--split col] [--time col] [--config ml-xray.toml] \
     [--baseline base.json] [--save-baseline base.json] \
     [--fail-on error] [--fail-on-new error] [--html out.html] [--json out.json]
-ml-xray slices PREDS [--features cols] [--metric auto|accuracy|f1|mse|mae|roc_auc|log_loss] [--html out.html]
-ml-xray embed-diff A.npy B.npy [--ids ids.csv] [-k 10] [--html out.html]
+ml-xray slices PREDS [--features cols] [--metric auto|accuracy|f1|mse|mae|roc_auc|log_loss] \
+    [--html out.html] [--interactive]
+ml-xray embed-diff A.npy B.npy [--ids ids.csv] [-k 10] [--backend auto|exact|approx] \
+    [--html out.html] [--interactive]
 ml-xray report --lint DATA --target y --slices PREDS --embed A.npy B.npy --html out.html
 ```
+
+`--interactive` embeds a self-contained plotly chart (needs `ml-xray[viz]`);
+`--backend approx` uses pynndescent (`ml-xray[embeddings]`) for large embedding
+sets. Both degrade gracefully when the optional dependency is absent.
 
 `PREDS` is a CSV with `y_true,y_pred[,y_proba]` columns plus the feature columns
 to slice on.
@@ -226,9 +235,10 @@ to slice on.
   self-contained HTML file, with a matplotlib viz backend.
 - **v0.2 — done:** TOML config (check selection + severity overrides), baseline
   snapshots and regression diffing, `--fail-on-new` gate, probability-aware
-  slice metrics (ROC-AUC, log-loss), and a `pre-commit` hook.
-- **Next:** temporal-leakage check, numeric-range slice predicates, approximate
-  k-NN for large embedding sets, and riskplot/plotly interactive charts.
+  slice metrics (ROC-AUC, log-loss), a `pre-commit` hook, a **temporal-leakage
+  check**, **numeric-range slice predicates** (`tenure < 6`), an **approximate
+  k-NN backend** (pynndescent) for large embedding sets, and **interactive
+  plotly charts** in the slice/embed HTML reports.
 
 ## License
 
