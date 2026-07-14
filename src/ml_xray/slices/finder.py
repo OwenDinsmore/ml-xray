@@ -30,8 +30,8 @@ from math import log
 import numpy as np
 import pandas as pd
 
-from ..lint._util import infer_task
-from .binning import discretize
+from ..lint._util import infer_task, is_numeric
+from .binning import MISSING, bin_feature, bucket_rare_levels, numeric_range_items
 from .metrics import Metric, benjamini_hochberg, resolve_metric, slice_pvalue
 
 __all__ = ["Slice", "SliceReport", "SliceFinder"]
@@ -169,6 +169,10 @@ class SliceFinder:
         Benjamini-Hochberg-corrected significance level.
     n_bins : int
         Target bins per numeric feature during discretization.
+    numeric_ranges : bool
+        When ``True`` (default), numeric features produce contiguous *range*
+        predicates (``tenure < 3``, ``[3, 9)``, ``>= 9``) rather than only single
+        quantile bins, so a weak region spanning several bins reads as one range.
     """
 
     def __init__(
@@ -180,6 +184,7 @@ class SliceFinder:
         top_k: int = 20,
         significance: float = 0.05,
         n_bins: int = 4,
+        numeric_ranges: bool = True,
     ) -> None:
         self.metric = metric
         self.max_depth = max_depth
@@ -187,6 +192,7 @@ class SliceFinder:
         self.top_k = top_k
         self.significance = significance
         self.n_bins = n_bins
+        self.numeric_ranges = numeric_ranges
         self._report: SliceReport | None = None
 
     def fit(
@@ -234,8 +240,7 @@ class SliceFinder:
         else:
             loss = np.abs(y_true.astype(float) - y_pred.astype(float))
 
-        binned = discretize(X, n_bins=self.n_bins, rare_min_count=self.min_support, error=loss)
-        items = self._depth1_items(binned)
+        items = self._depth1_items(X, loss)
 
         tested = self._lattice_search(items, n, y_true, y_pred, proba, loss, metric, baseline, task)
         self._report = self._build_report(tested, baseline, metric)
@@ -255,15 +260,37 @@ class SliceFinder:
 
     # -- internals --------------------------------------------------------
 
-    def _depth1_items(self, binned: pd.DataFrame) -> list[_Item]:
+    def _depth1_items(self, X: pd.DataFrame, loss: np.ndarray) -> list[_Item]:
+        """Build depth-1 predicate items per feature.
+
+        Numeric features become contiguous range predicates (or single quantile
+        bins when ``numeric_ranges`` is off); categoricals become rare-bucketed
+        level predicates.
+        """
         items: list[_Item] = []
-        for col in binned.columns:
-            values = binned[col]
-            for level, count in values.value_counts().items():
-                if count < self.min_support:
-                    continue
-                items.append((col, level, (values == level).to_numpy()))
+        for col in X.columns:
+            series = X[col]
+            if is_numeric(series):
+                items.extend(self._numeric_items(col, series, loss))
+            else:
+                bucketed = bucket_rare_levels(series, self.min_support)
+                for level, count in bucketed.value_counts().items():
+                    if count < self.min_support:
+                        continue
+                    items.append((col, level, (bucketed == level).to_numpy()))
         return items
+
+    def _numeric_items(self, col: str, series: pd.Series, loss: np.ndarray) -> list[_Item]:
+        if self.numeric_ranges:
+            ranges = numeric_range_items(series, n_bins=self.n_bins, min_support=self.min_support)
+            return [(col, label, mask) for label, mask in ranges]
+        binned = bin_feature(series, strategy="quantile", n_bins=self.n_bins)
+        out: list[_Item] = []
+        for level, count in binned.value_counts().items():
+            if count < self.min_support or level == MISSING:
+                continue
+            out.append((col, level, (binned == level).to_numpy()))
+        return out
 
     def _lattice_search(
         self, items, n, y_true, y_pred, proba, loss, metric, baseline, task

@@ -16,7 +16,15 @@ import pandas as pd
 
 from ..lint._util import is_numeric
 
-__all__ = ["bin_feature", "discretize", "BinStrategy", "MISSING", "OTHER"]
+__all__ = [
+    "bin_feature",
+    "discretize",
+    "numeric_range_items",
+    "bucket_rare_levels",
+    "BinStrategy",
+    "MISSING",
+    "OTHER",
+]
 
 BinStrategy = Literal["quantile", "tree", "custom"]
 
@@ -118,6 +126,77 @@ def _bucket_rare(values: pd.Series, min_count: int) -> pd.Series:
     out = s.where(s.isin(keep), OTHER)
     out = out.where(s.notna(), MISSING)
     return out.astype("object")
+
+
+# Public alias for use outside this module.
+bucket_rare_levels = _bucket_rare
+
+
+def _fmt_range(lo: float, hi: float) -> str:
+    """Human-readable label for a half-open ``[lo, hi)`` range."""
+    if lo == -np.inf:
+        return f"< {hi:.3g}"
+    if hi == np.inf:
+        return f">= {lo:.3g}"
+    return f"[{lo:.3g}, {hi:.3g})"
+
+
+def numeric_range_items(
+    values: pd.Series,
+    *,
+    n_bins: int = 4,
+    min_support: int = 1,
+) -> list[tuple[str, np.ndarray]]:
+    """Enumerate contiguous numeric-range predicates for a feature.
+
+    Rather than only single quantile bins, this yields every *contiguous* range
+    of quantile bins (e.g. ``< 3``, ``[3, 9)``, ``>= 9``), so a weak region that
+    spans several adjacent bins can be reported as one readable range instead of
+    fragmented pieces.
+
+    Parameters
+    ----------
+    values : pandas.Series
+        The numeric feature.
+    n_bins : int
+        Number of quantile bins whose boundaries seed the ranges.
+    min_support : int
+        Minimum matching rows for a range to be emitted.
+
+    Returns
+    -------
+    list of (str, numpy.ndarray)
+        ``(label, boolean mask)`` pairs. The all-encompassing range is omitted.
+    """
+    v = pd.to_numeric(values, errors="coerce").reset_index(drop=True)
+    finite = v[v.notna()]
+    if finite.nunique() < 2:
+        return []
+    edges = np.unique(np.quantile(finite.to_numpy(), np.linspace(0, 1, n_bins + 1)))
+    interior = edges[1:-1]
+    if interior.size == 0:
+        return []
+    bounds = np.concatenate([[-np.inf], interior, [np.inf]])
+    arr = v.to_numpy(dtype=float)
+    notna = v.notna().to_numpy()
+
+    items: list[tuple[str, np.ndarray]] = []
+    seen: set[tuple[float, float]] = set()
+    m = len(bounds)
+    for i in range(m - 1):
+        for j in range(i + 1, m):
+            lo, hi = float(bounds[i]), float(bounds[j])
+            if lo == -np.inf and hi == np.inf:
+                continue  # the whole column is not a predicate
+            if (lo, hi) in seen:
+                continue
+            seen.add((lo, hi))
+            mask = notna & (arr >= lo) & (arr < hi)
+            support = int(mask.sum())
+            if support < min_support or support == int(notna.sum()):
+                continue
+            items.append((_fmt_range(lo, hi), mask))
+    return items
 
 
 def discretize(

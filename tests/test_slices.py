@@ -150,3 +150,55 @@ def test_benjamini_hochberg_monotone():
 def test_slice_dataclass_describe():
     s = Slice({"region": "EU", "tenure": "<3mo"}, 1204, 0.42, 0.79, -0.37, 0.001)
     assert s.describe() == "region=EU & tenure=<3mo"
+
+
+def _numeric_weak_region(seed=0):
+    rng = np.random.default_rng(seed)
+    n = 3000
+    tenure = rng.uniform(0, 24, n)
+    y = rng.integers(0, 2, n)
+    y_pred = y.copy()
+    weak = tenure < 6  # spans ~2 quantile bins
+    flip = weak & (rng.uniform(size=n) < 0.55)
+    y_pred[flip] = 1 - y_pred[flip]
+    return pd.DataFrame({"tenure": tenure}), y, y_pred
+
+
+def test_numeric_range_predicate_captures_weak_region():
+    X, y, y_pred = _numeric_weak_region()
+    report = SliceFinder(metric="accuracy", min_support=50).fit(X, y, y_pred).report()
+    top = report.slices[0]
+    assert "tenure" in top.predicate
+    # A contiguous-range predicate reads like "< x" or "[lo, hi)".
+    label = top.predicate["tenure"]
+    assert label.startswith("<") or label.startswith("[") or label.startswith(">=")
+    assert top.delta < 0
+
+
+def test_numeric_ranges_off_uses_single_bins():
+
+    X, y, y_pred = _numeric_weak_region()
+    report = (
+        SliceFinder(metric="accuracy", min_support=50, numeric_ranges=False)
+        .fit(X, y, y_pred)
+        .report()
+    )
+    assert report.slices
+    # Single-bin labels are full intervals, not open-ended "< x" ranges.
+    assert not report.slices[0].predicate["tenure"].startswith("<")
+
+
+def test_numeric_range_items_are_contiguous_and_labeled():
+    s = pd.Series(np.arange(100, dtype=float))
+    items = numeric_range_items_helper(s)
+    labels = [lbl for lbl, _ in items]
+    assert any(lbl.startswith("< ") for lbl in labels)
+    assert any(lbl.startswith(">= ") for lbl in labels)
+    # No item selects every row (the whole-column range is excluded).
+    assert all(mask.sum() < len(s) for _, mask in items)
+
+
+def numeric_range_items_helper(s):
+    from ml_xray.slices.binning import numeric_range_items
+
+    return numeric_range_items(s, n_bins=4, min_support=1)
