@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 
 from ._util import infer_task
 from .base import Check, Finding, LintContext, Severity, default_checks
+
+if TYPE_CHECKING:  # pragma: no cover
+    from ..config import LintConfig
 
 __all__ = ["Linter", "LintReport"]
 
@@ -22,6 +25,9 @@ class Linter:
     target : str, optional
         Name of the target/label column. Enables leakage, label-noise, and
         imbalance checks that need a target.
+    config : LintConfig, optional
+        Configuration controlling check selection and severity overrides. When
+        given and ``checks`` is ``None``, the checks are built from the config.
 
     Examples
     --------
@@ -31,9 +37,26 @@ class Linter:
     False
     """
 
-    def __init__(self, checks: list[Check] | None = None, *, target: str | None = None) -> None:
-        self.checks: list[Check] = list(checks) if checks is not None else default_checks()
+    def __init__(
+        self,
+        checks: list[Check] | None = None,
+        *,
+        target: str | None = None,
+        config: LintConfig | None = None,
+    ) -> None:
+        if checks is not None:
+            self.checks = list(checks)
+        elif config is not None:
+            self.checks = config.build_checks()
+        else:
+            self.checks = default_checks()
         self.target = target
+        self.config = config
+
+    @classmethod
+    def from_config(cls, config: LintConfig, *, target: str | None = None) -> Linter:
+        """Build a linter from a :class:`~ml_xray.config.LintConfig`."""
+        return cls(target=target, config=config)
 
     def run(
         self,
@@ -41,7 +64,7 @@ class Linter:
         *,
         split: pd.Series | None = None,
         task: str | None = None,
-        seed: int = 0,
+        seed: int | None = None,
     ) -> LintReport:
         """Run all configured checks over ``df`` and return a report.
 
@@ -54,8 +77,9 @@ class Linter:
             Must be alignable to ``df`` (same length); its index is ignored.
         task : {"classification", "regression"}, optional
             The learning task. Inferred from the target when omitted.
-        seed : int
-            Seed for stochastic checks, so reports are reproducible.
+        seed : int, optional
+            Seed for stochastic checks, so reports are reproducible. Defaults to
+            the config's seed (or ``0``) when not given.
 
         Returns
         -------
@@ -70,6 +94,9 @@ class Linter:
         """
         if self.target is not None and self.target not in df.columns:
             raise ValueError(f"target column {self.target!r} is not in the DataFrame")
+
+        if seed is None:
+            seed = self.config.seed if self.config is not None else 0
 
         split_series = self._prepare_split(df, split)
         resolved_task = task
@@ -87,6 +114,9 @@ class Linter:
         findings: list[Finding] = []
         for check in self.checks:
             findings.extend(check.run(ctx))
+
+        if self.config is not None:
+            findings = self.config.apply_severity(findings)
 
         meta = {
             "n_rows": int(len(df)),
@@ -164,6 +194,33 @@ class LintReport:
             "counts": self.counts(),
             "findings": [f.to_dict() for f in self.findings],
         }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> LintReport:
+        """Reconstruct a report from its :meth:`to_dict` form."""
+        findings = [Finding.from_dict(f) for f in data.get("findings", [])]
+        return cls(findings=findings, meta=dict(data.get("meta") or {}))
+
+    def to_json(self, path: str) -> None:
+        """Write the report to a JSON file (a machine-readable snapshot).
+
+        Parameters
+        ----------
+        path : str
+            Destination file path. Overwritten if it exists.
+        """
+        import json
+
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(self.to_dict(), fh, indent=2, default=str)
+
+    @classmethod
+    def from_json(cls, path: str) -> LintReport:
+        """Load a report previously saved with :meth:`to_json`."""
+        import json
+
+        with open(path, encoding="utf-8") as fh:
+            return cls.from_dict(json.load(fh))
 
     def to_html(self, path: str) -> None:
         """Render the report to a single self-contained HTML file.

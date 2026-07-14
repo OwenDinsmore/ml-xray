@@ -12,11 +12,13 @@ All analysis entry points accept arrays / DataFrames and never a model object.
 
 from __future__ import annotations
 
+from .baseline import ReportDiff, diff_reports
+from .config import LintConfig
 from .embed import EmbedDiffReport, EmbeddingDiff
 from .lint import Check, Finding, Linter, LintReport, Severity
 from .slices import Slice, SliceFinder, SliceReport
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = [
     "__version__",
@@ -26,6 +28,10 @@ __all__ = [
     "Finding",
     "Severity",
     "Check",
+    "LintConfig",
+    # baseline / regression tracking
+    "diff_reports",
+    "ReportDiff",
     # slices
     "SliceFinder",
     "SliceReport",

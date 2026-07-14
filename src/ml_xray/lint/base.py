@@ -102,6 +102,27 @@ class Finding:
             "rows": self.rows,
         }
 
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> Finding:
+        """Reconstruct a :class:`Finding` from its :meth:`to_dict` form."""
+        return cls(
+            check=data["check"],
+            severity=Severity.from_name(data["severity"]),
+            message=data["message"],
+            column=data.get("column"),
+            detail=dict(data.get("detail") or {}),
+            rows=data.get("rows"),
+        )
+
+    def fingerprint(self) -> tuple[str, str, str]:
+        """Return a stable identity for the finding across runs.
+
+        Two findings from the same check, column, and ``detail["kind"]`` are
+        considered "the same" for baseline diffing, even if their counts or
+        offending rows change between runs.
+        """
+        return (self.check, self.column or "", str(self.detail.get("kind", "")))
+
 
 @dataclass
 class LintContext:
