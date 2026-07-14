@@ -1,0 +1,19 @@
+# Lets other repos use ml-xray as a pre-commit hook. In their
+# .pre-commit-config.yaml:
+#
+#   repos:
+#     - repo: https://github.com/OwenDinsmore/ml-xray
+#       rev: v0.2.0
+#       hooks:
+#         - id: ml-xray-lint
+#           args: [data/train.csv, --target, y, --split, split, --fail-on, error]
+#
+# The dataset path and flags are supplied via `args` (pass_filenames is off, so
+# ml-xray does not receive the staged file list as positional arguments).
+- id: ml-xray-lint
+  name: ml-xray dataset lint
+  description: Gate a dataset on ml-xray data-quality checks (leakage, drift, label noise, ...).
+  entry: ml-xray lint
+  language: python
+  pass_filenames: false
+  always_run: true

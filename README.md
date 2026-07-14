@@ -119,6 +119,67 @@ print(report.neighbor_overlap, report.cluster_stability)
 print(report.movers[:10])         # ids whose neighborhoods changed most
 ```
 
+## Using it in CI
+
+### Configuration (`ml-xray.toml` or `[tool.ml-xray]`)
+
+Pin which checks run and how severe their findings are, without touching code:
+
+```toml
+# ml-xray.toml
+checks = ["leakage", "drift", "duplicates", "imbalance"]   # omit to run all
+disable = ["outliers"]
+seed = 7
+
+[severity]
+duplicates = "info"                    # downgrade every duplicates finding
+"imbalance.rare_levels" = "ignore"     # silence a specific kind
+"drift.numeric" = "error"              # escalate another
+
+[check_args.outliers]
+ranges = { age = [0, 120] }            # declared valid ranges
+```
+
+```bash
+ml-xray lint data.csv --target y --config ml-xray.toml --fail-on error
+```
+
+### Baseline / regression tracking
+
+Gate CI on *new* problems a change introduces, not on pre-existing debt:
+
+```bash
+# once: snapshot the current state
+ml-xray lint data.csv --target y --save-baseline .ml-xray-baseline.json
+
+# in CI: fail only if the change adds a new ERROR-level finding
+ml-xray lint data.csv --target y \
+    --baseline .ml-xray-baseline.json --fail-on-new error
+```
+
+```python
+from ml_xray import Linter, diff_reports
+from ml_xray.lint.linter import LintReport
+
+baseline = LintReport.from_json(".ml-xray-baseline.json")
+current = Linter(target="y").run(df)
+diff = diff_reports(baseline, current)
+print(diff.counts())                 # {'new': ..., 'resolved': ..., ...}
+if not diff.is_clean():              # any NEW error-level finding?
+    raise SystemExit("new data-quality regressions")
+```
+
+### pre-commit hook
+
+```yaml
+repos:
+  - repo: https://github.com/OwenDinsmore/ml-xray
+    rev: v0.2.0
+    hooks:
+      - id: ml-xray-lint
+        args: [data/train.csv, --target, y, --fail-on, error]
+```
+
 ## Design principles
 
 - **Framework-agnostic** array / DataFrame contracts.
@@ -145,8 +206,10 @@ pip install "ml-xray[all]"          # everything
 ## CLI
 
 ```bash
-ml-xray lint DATA --target y [--split col] [--fail-on error] [--html out.html]
-ml-xray slices PREDS [--features cols] [--metric auto] [--html out.html]
+ml-xray lint DATA --target y [--split col] [--config ml-xray.toml] \
+    [--baseline base.json] [--save-baseline base.json] \
+    [--fail-on error] [--fail-on-new error] [--html out.html] [--json out.json]
+ml-xray slices PREDS [--features cols] [--metric auto|accuracy|f1|mse|mae|roc_auc|log_loss] [--html out.html]
 ml-xray embed-diff A.npy B.npy [--ids ids.csv] [-k 10] [--html out.html]
 ml-xray report --lint DATA --target y --slices PREDS --embed A.npy B.npy --html out.html
 ```
@@ -160,8 +223,12 @@ to slice on.
 - **Phase 2 — done:** `ml_xray.slices` + `ml-xray slices`.
 - **Phase 3 — done:** `ml_xray.embed` + `ml-xray embed-diff`.
 - **Phase 4 — done:** unified `ml-xray report` stitching all sections into one
-  self-contained HTML file, with a matplotlib viz backend (riskplot/plotly
-  polish next).
+  self-contained HTML file, with a matplotlib viz backend.
+- **v0.2 — done:** TOML config (check selection + severity overrides), baseline
+  snapshots and regression diffing, `--fail-on-new` gate, probability-aware
+  slice metrics (ROC-AUC, log-loss), and a `pre-commit` hook.
+- **Next:** temporal-leakage check, numeric-range slice predicates, approximate
+  k-NN for large embedding sets, and riskplot/plotly interactive charts.
 
 ## License
 
