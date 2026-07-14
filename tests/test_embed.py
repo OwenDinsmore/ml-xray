@@ -85,6 +85,44 @@ def test_project_2d_shared_basis_shapes():
     assert pb.shape == (60, 2)
 
 
+def test_backend_resolution_auto():
+    from ml_xray.embed.diff import _resolve_backend
+
+    # Exact is always forced; approx needs pynndescent, so auto-small is exact.
+    assert _resolve_backend("exact", 10_000) == "exact"
+    assert _resolve_backend("auto", 100) == "exact"
+
+
+def test_approx_backend_missing_raises_when_forced(monkeypatch):
+    import ml_xray.embed.diff as diff_mod
+
+    monkeypatch.setattr(diff_mod, "optional_import", lambda name: None)
+    import pytest
+
+    with pytest.raises(ImportError):
+        diff_mod._resolve_backend("approx", 100)
+
+
+def test_approx_backend_matches_exact():
+    import pytest
+
+    pytest.importorskip("pynndescent")
+    planted = synthetic.partially_perturbed_spaces(n=400, moved=40)
+    exact = EmbeddingDiff(k=10, backend="exact").fit(planted.emb_a, planted.emb_b).report()
+    approx = EmbeddingDiff(k=10, backend="approx").fit(planted.emb_a, planted.emb_b).report()
+    assert approx.backend == "approx"
+    # Approximate NN should land very close to exact on well-separated clusters.
+    assert abs(approx.neighbor_overlap - exact.neighbor_overlap) < 0.1
+
+    identical = synthetic.identical_spaces(n=400)
+    same = EmbeddingDiff(k=10, backend="approx").fit(identical.emb_a, identical.emb_b).report()
+    assert same.neighbor_overlap > 0.95
+
+    moved = set(planted.moved_ids.tolist())
+    recall = len(set(approx.movers[: len(moved)]) & moved) / len(moved)
+    assert recall >= 0.8
+
+
 def test_report_movers_use_ids():
     planted = synthetic.partially_perturbed_spaces(n=120, moved=10)
     ids = [f"item-{i}" for i in range(120)]

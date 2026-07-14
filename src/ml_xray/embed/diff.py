@@ -17,22 +17,76 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from typing import Literal
 
 import numpy as np
 
+from .._optional import optional_import
+
 __all__ = ["EmbedDiffReport", "EmbeddingDiff"]
 
+Backend = Literal["auto", "exact", "approx"]
 
-def _knn_indices(emb: np.ndarray, k: int) -> np.ndarray:
-    """Return the indices of each row's ``k`` nearest neighbors (excluding self)."""
-    from sklearn.neighbors import NearestNeighbors
+# Above this row count, "auto" prefers the approximate backend when available.
+_APPROX_THRESHOLD = 5000
 
+
+def _resolve_backend(backend: Backend, n: int) -> str:
+    """Pick the concrete k-NN backend, honoring availability for ``"auto"``."""
+    if backend == "exact":
+        return "exact"
+    have_pynndescent = optional_import("pynndescent") is not None
+    if backend == "approx":
+        if not have_pynndescent:
+            raise ImportError(
+                "backend='approx' needs pynndescent (bundled with the [embeddings] "
+                'extra). Install it with: pip install "ml-xray[embeddings]"'
+            )
+        return "approx"
+    # auto: approximate only pays off on large sets, and only if available.
+    return "approx" if (have_pynndescent and n > _APPROX_THRESHOLD) else "exact"
+
+
+def _drop_self(idx: np.ndarray, k: int) -> np.ndarray:
+    """Remove each row's own index from its neighbor list and keep ``k`` columns."""
+    out = np.empty((idx.shape[0], k), dtype=int)
+    for i in range(idx.shape[0]):
+        row = idx[i][idx[i] != i][:k]
+        if row.size < k:  # pad degenerate rows by repeating the last neighbor
+            row = np.pad(row, (0, k - row.size), mode="edge") if row.size else np.full(k, i)
+        out[i] = row
+    return out
+
+
+def _knn_indices(emb: np.ndarray, k: int, *, backend: str = "exact", seed: int = 0) -> np.ndarray:
+    """Return each row's ``k`` nearest-neighbor indices (excluding self).
+
+    Parameters
+    ----------
+    emb : numpy.ndarray
+        Embedding matrix.
+    k : int
+        Neighborhood size.
+    backend : {"exact", "approx"}
+        ``"exact"`` uses scikit-learn; ``"approx"`` uses pynndescent (NN-descent)
+        for large matrices.
+    seed : int
+        Random seed for the approximate index.
+    """
     n = emb.shape[0]
     k_eff = min(k, n - 1)
+    if backend == "approx":
+        from pynndescent import NNDescent
+
+        index = NNDescent(emb, n_neighbors=k_eff + 1, random_state=seed)
+        idx, _ = index.neighbor_graph
+        return _drop_self(np.asarray(idx), k_eff)
+
+    from sklearn.neighbors import NearestNeighbors
+
     nn = NearestNeighbors(n_neighbors=k_eff + 1).fit(emb)
     idx = nn.kneighbors(emb, return_distance=False)
-    # Drop the self column (each point is its own nearest neighbor).
-    return idx[:, 1:]
+    return _drop_self(idx, k_eff)
 
 
 def _jaccard(a: np.ndarray, b: np.ndarray) -> float:
@@ -61,6 +115,8 @@ class EmbedDiffReport:
         Row ids in the original order.
     k : int
         Neighborhood size used.
+    backend : str
+        The k-NN backend actually used (``"exact"`` or ``"approx"``).
     """
 
     neighbor_overlap: float = float("nan")
@@ -69,6 +125,7 @@ class EmbedDiffReport:
     movers: list = field(default_factory=list)
     ids: list = field(default_factory=list)
     k: int = 0
+    backend: str = "exact"
     _emb_a: np.ndarray | None = field(default=None, repr=False)
     _emb_b: np.ndarray | None = field(default=None, repr=False)
 
@@ -79,6 +136,7 @@ class EmbedDiffReport:
             "neighbor_overlap": self.neighbor_overlap,
             "cluster_stability": self.cluster_stability,
             "k": self.k,
+            "backend": self.backend,
             "n_points": int(drift.size),
             "mean_drift": float(np.mean(drift)) if drift.size else float("nan"),
             "max_drift": float(np.max(drift)) if drift.size else float("nan"),
@@ -137,6 +195,12 @@ class EmbeddingDiff:
         2D projector for the report scatter.
     n_clusters : int
         Number of clusters for the cluster-stability (ARI) metric.
+    backend : {"auto", "exact", "approx"}
+        k-NN backend. ``"exact"`` uses scikit-learn; ``"approx"`` uses
+        pynndescent (from the ``[embeddings]`` extra) for large sets; ``"auto"``
+        picks approximate only when it is available and ``n`` is large.
+    seed : int
+        Random seed for the approximate index.
     """
 
     def __init__(
@@ -146,11 +210,15 @@ class EmbeddingDiff:
         align: str = "procrustes",
         projector: str = "auto",
         n_clusters: int = 8,
+        backend: Backend = "auto",
+        seed: int = 0,
     ) -> None:
         self.k = k
         self.align = align
         self.projector = projector
         self.n_clusters = n_clusters
+        self.backend = backend
+        self.seed = seed
         self._report: EmbedDiffReport | None = None
 
     def fit(
@@ -190,8 +258,9 @@ class EmbeddingDiff:
         n = a.shape[0]
         ids_list = list(ids) if ids is not None else list(range(n))
 
-        knn_a = _knn_indices(a, self.k)
-        knn_b = _knn_indices(b, self.k)
+        backend = _resolve_backend(self.backend, n)
+        knn_a = _knn_indices(a, self.k, backend=backend, seed=self.seed)
+        knn_b = _knn_indices(b, self.k, backend=backend, seed=self.seed)
         per_point_jaccard = np.array([_jaccard(knn_a[i], knn_b[i]) for i in range(n)])
         per_point_drift = 1.0 - per_point_jaccard
         neighbor_overlap = float(np.mean(per_point_jaccard)) if n else float("nan")
@@ -208,6 +277,7 @@ class EmbeddingDiff:
             movers=movers,
             ids=ids_list,
             k=min(self.k, max(n - 1, 0)),
+            backend=backend,
             _emb_a=a,
             _emb_b=b,
         )

@@ -44,10 +44,17 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-embeddings = ["umap-learn>=0.5"]
+embeddings = ["umap-learn>=0.5", "pynndescent>=0.5"]
 viz = ["matplotlib>=3.5", "riskplot", "plotly>=5.0"]
 noise = ["cleanlab>=2.0"]
-all = ["umap-learn>=0.5", "matplotlib>=3.5", "riskplot", "plotly>=5.0", "cleanlab>=2.0"]
+all = [
+    "umap-learn>=0.5",
+    "pynndescent>=0.5",
+    "matplotlib>=3.5",
+    "riskplot",
+    "plotly>=5.0",
+    "cleanlab>=2.0",
+]
 dev = [
     "pytest>=7.0",
     "ruff>=0.1",
