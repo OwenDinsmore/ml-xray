@@ -56,6 +56,80 @@ def test_unknown_split_column_errors(tmp_path, capsys):
     assert "not found" in capsys.readouterr().err
 
 
+def test_lint_with_config_downgrades_gate(tmp_path):
+    planted = synthetic.with_leaked_column()
+    csv = _write_csv(planted, tmp_path / "data.csv")
+    (tmp_path / "ml-xray.toml").write_text('[severity]\nleakage = "warn"\n')
+    # Without config the leak is ERROR -> gate fails; with config it's WARN -> passes.
+    assert main(["lint", str(csv), "--target", "y", "--fail-on", "error"]) == 1
+    code = main(
+        [
+            "lint",
+            str(csv),
+            "--target",
+            "y",
+            "--fail-on",
+            "error",
+            "--config",
+            str(tmp_path / "ml-xray.toml"),
+        ]
+    )
+    assert code == 0
+
+
+def test_lint_save_and_use_baseline(tmp_path, capsys):
+    # Save a baseline on a clean dataset.
+    clean = _write_csv(synthetic.clean_classification(), tmp_path / "clean.csv")
+    base = tmp_path / "base.json"
+    assert main(["lint", str(clean), "--target", "y", "--save-baseline", str(base)]) == 0
+    assert base.exists()
+
+    # A leaked dataset diffed against the clean baseline -> a NEW error -> gate fails.
+    leaked = _write_csv(synthetic.with_leaked_column(), tmp_path / "leaked.csv")
+    code = main(
+        [
+            "lint",
+            str(leaked),
+            "--target",
+            "y",
+            "--baseline",
+            str(base),
+            "--fail-on-new",
+            "error",
+        ]
+    )
+    out = capsys.readouterr().out
+    assert "vs baseline:" in out
+    assert code == 1
+
+
+def test_fail_on_new_requires_baseline(tmp_path, capsys):
+    csv = _write_csv(synthetic.clean_classification(), tmp_path / "data.csv")
+    code = main(["lint", str(csv), "--target", "y", "--fail-on-new", "error"])
+    assert code == 2
+    assert "requires --baseline" in capsys.readouterr().err
+
+
+def test_lint_baseline_no_new_findings_passes(tmp_path):
+    leaked = _write_csv(synthetic.with_leaked_column(), tmp_path / "leaked.csv")
+    base = tmp_path / "base.json"
+    main(["lint", str(leaked), "--target", "y", "--save-baseline", str(base)])
+    # Same dataset vs its own baseline: pre-existing debt, nothing new -> passes.
+    code = main(
+        [
+            "lint",
+            str(leaked),
+            "--target",
+            "y",
+            "--baseline",
+            str(base),
+            "--fail-on-new",
+            "error",
+        ]
+    )
+    assert code == 0
+
+
 def _write_preds(path):
     planted = synthetic.weak_region_predictions()
     df = planted.X.copy()

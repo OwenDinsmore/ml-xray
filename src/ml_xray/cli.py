@@ -42,9 +42,18 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["info", "warn", "error"],
         help="Exit non-zero if any finding is at or above this severity.",
     )
+    p_lint.add_argument(
+        "--fail-on-new",
+        default=None,
+        choices=["info", "warn", "error"],
+        help="With --baseline, exit non-zero only on NEW findings at/above this severity.",
+    )
+    p_lint.add_argument("--config", default=None, help="Path to ml-xray.toml / pyproject.toml.")
+    p_lint.add_argument("--baseline", default=None, help="Baseline report JSON to diff against.")
+    p_lint.add_argument("--save-baseline", default=None, help="Write this run's report JSON here.")
     p_lint.add_argument("--html", default=None, help="Write an HTML report to this path.")
     p_lint.add_argument("--json", default=None, help="Write the report dict as JSON to this path.")
-    p_lint.add_argument("--seed", type=int, default=0, help="Seed for stochastic checks.")
+    p_lint.add_argument("--seed", type=int, default=None, help="Seed for stochastic checks.")
     p_lint.set_defaults(func=_cmd_lint)
 
     # --- slices -----------------------------------------------------------
@@ -97,6 +106,13 @@ def _read_table(path: str):
 
 def _cmd_lint(args: argparse.Namespace) -> int:
     from .lint import Linter
+    from .lint.base import Severity
+
+    config = None
+    if args.config is not None:
+        from .config import LintConfig
+
+        config = LintConfig.from_toml(args.config)
 
     df = _read_table(args.data)
     split = None
@@ -107,7 +123,9 @@ def _cmd_lint(args: argparse.Namespace) -> int:
         split = df[args.split]
         df = df.drop(columns=[args.split])
 
-    report = Linter(target=args.target).run(df, split=split, task=args.task, seed=args.seed)
+    report = Linter(target=args.target, config=config).run(
+        df, split=split, task=args.task, seed=args.seed
+    )
 
     counts = report.counts()
     print(
@@ -127,10 +145,42 @@ def _cmd_lint(args: argparse.Namespace) -> int:
         with open(args.json, "w", encoding="utf-8") as fh:
             json.dump(report.to_dict(), fh, indent=2, default=str)
         print(f"wrote JSON report to {args.json}")
+    if args.save_baseline:
+        report.to_json(args.save_baseline)
+        print(f"wrote baseline snapshot to {args.save_baseline}")
+
+    # Baseline diff: report new/resolved and (optionally) gate on new findings.
+    diff = None
+    if args.baseline:
+        from .baseline import diff_reports
+        from .lint.linter import LintReport
+
+        baseline = LintReport.from_json(args.baseline)
+        diff = diff_reports(baseline, report)
+        c = diff.counts()
+        print(
+            f"vs baseline: {c['new']} new, {c['resolved']} resolved, "
+            f"{c['escalated']} escalated, {c['persisting']} persisting"
+        )
+        for f in diff.new:
+            col = f" [{f.column}]" if f.column else ""
+            print(f"  NEW   {f.severity.name:5s} {f.check}{col}: {f.message}")
+
+    if args.fail_on_new is not None:
+        if diff is None:
+            print("error: --fail-on-new requires --baseline", file=sys.stderr)
+            return 2
+        threshold = Severity.from_name(args.fail_on_new)
+        offenders = diff.new_at_or_above(threshold)
+        if offenders:
+            print(
+                f"gate failed: {len(offenders)} NEW finding(s) at or above "
+                f"{args.fail_on_new.upper()}",
+                file=sys.stderr,
+            )
+            return 1
 
     if args.fail_on is not None:
-        from .lint.base import Severity
-
         threshold = Severity.from_name(args.fail_on)
         if any(f.severity >= threshold for f in report):
             print(f"gate failed: findings at or above {args.fail_on.upper()}", file=sys.stderr)
