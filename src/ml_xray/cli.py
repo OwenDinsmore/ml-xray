@@ -30,6 +30,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_lint.add_argument("data", help="Path to a CSV/Parquet dataset.")
     p_lint.add_argument("--target", default=None, help="Target/label column name.")
     p_lint.add_argument("--split", default=None, help="Column holding train/test split labels.")
+    p_lint.add_argument("--time", default=None, help="Timestamp column for the temporal check.")
     p_lint.add_argument(
         "--task",
         default=None,
@@ -123,8 +124,12 @@ def _cmd_lint(args: argparse.Namespace) -> int:
         split = df[args.split]
         df = df.drop(columns=[args.split])
 
+    if args.time is not None and args.time not in df.columns:
+        print(f"error: time column {args.time!r} not found", file=sys.stderr)
+        return 2
+
     report = Linter(target=args.target, config=config).run(
-        df, split=split, task=args.task, seed=args.seed
+        df, split=split, task=args.task, seed=args.seed, time=args.time
     )
 
     counts = report.counts()

@@ -141,6 +141,8 @@ class LintContext:
         The learning task. Inferred from the target when ``None``.
     seed : int
         Seed for any stochastic check, so runs are reproducible.
+    time : str, optional
+        Name of a timestamp/ordering column, used by the temporal-leakage check.
     """
 
     df: pd.DataFrame
@@ -148,13 +150,15 @@ class LintContext:
     split: pd.Series | None = None
     task: str | None = None
     seed: int = 0
+    time: str | None = None
 
     @property
     def feature_columns(self) -> list[str]:
-        """Column names excluding the target (all columns if no target)."""
+        """Column names excluding the target and time columns."""
         cols = list(self.df.columns)
-        if self.target is not None and self.target in cols:
-            cols.remove(self.target)
+        for special in (self.target, self.time):
+            if special is not None and special in cols:
+                cols.remove(special)
         return cols
 
     @property

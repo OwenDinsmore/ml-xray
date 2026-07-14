@@ -96,4 +96,4 @@ def test_discover_finds_ml_xray_toml(tmp_path):
 def test_discover_returns_default_when_absent(tmp_path):
     cfg = LintConfig.discover(tmp_path)
     assert cfg.checks is None
-    assert len(cfg.build_checks()) == 6
+    assert len(cfg.build_checks()) == 7

@@ -269,3 +269,36 @@ def partially_perturbed_spaces(
     moved_ids = rng.choice(n, size=moved, replace=False)
     b[moved_ids] += rng.normal(0, 12, (moved, d))
     return PlantedEmbed(emb_a=a, emb_b=b, moved_ids=np.sort(moved_ids))
+
+
+def with_temporal_leakage(n: int = 800, leak: int = 40, seed: int = 30) -> Planted:
+    """Plant train rows dated after the test split plus a time-proxy feature.
+
+    A proper temporal split has all train timestamps before all test timestamps.
+    Here ``leak`` train rows are given future timestamps (overlapping test), and
+    a ``proxy`` feature is made monotonic with time so it acts as a surrogate
+    timestamp.
+    """
+    rng = _rng(seed)
+    ts = np.arange(n, dtype=float)
+    split = np.where(ts < (2 * n) // 3, "train", "test").astype(object)
+    train_pos = np.flatnonzero(split == "train")
+    leak_rows = rng.choice(train_pos, size=leak, replace=False)
+    ts[leak_rows] = float(n) + 50  # dated into the future, inside the test window
+    proxy = ts * 1.5 + rng.normal(0, 0.01, n)
+    df = pd.DataFrame(
+        {
+            "x": rng.normal(0, 1, n),
+            "proxy": proxy,
+            "ts": ts,
+            "y": rng.integers(0, 2, n),
+        }
+    )
+    return Planted(
+        df=df,
+        target="y",
+        split=pd.Series(split, name="split"),
+        columns=["proxy", "ts"],
+        rows=sorted(int(i) for i in leak_rows),
+        meta={"time": "ts"},
+    )

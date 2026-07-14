@@ -65,6 +65,7 @@ class Linter:
         split: pd.Series | None = None,
         task: str | None = None,
         seed: int | None = None,
+        time: str | None = None,
     ) -> LintReport:
         """Run all configured checks over ``df`` and return a report.
 
@@ -80,6 +81,9 @@ class Linter:
         seed : int, optional
             Seed for stochastic checks, so reports are reproducible. Defaults to
             the config's seed (or ``0``) when not given.
+        time : str, optional
+            Name of a timestamp/ordering column enabling the temporal-leakage
+            check.
 
         Returns
         -------
@@ -89,11 +93,13 @@ class Linter:
         Raises
         ------
         ValueError
-            If ``target`` was set but is not a column of ``df``, or if ``split``
-            length does not match ``df``.
+            If ``target``/``time`` was set but is not a column of ``df``, or if
+            ``split`` length does not match ``df``.
         """
         if self.target is not None and self.target not in df.columns:
             raise ValueError(f"target column {self.target!r} is not in the DataFrame")
+        if time is not None and time not in df.columns:
+            raise ValueError(f"time column {time!r} is not in the DataFrame")
 
         if seed is None:
             seed = self.config.seed if self.config is not None else 0
@@ -109,6 +115,7 @@ class Linter:
             split=split_series,
             task=resolved_task,
             seed=seed,
+            time=time,
         )
 
         findings: list[Finding] = []
@@ -124,6 +131,7 @@ class Linter:
             "target": self.target,
             "task": resolved_task,
             "has_split": split_series is not None,
+            "time": time,
             "checks": [c.name for c in self.checks],
         }
         return LintReport(findings=findings, meta=meta)

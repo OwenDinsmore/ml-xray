@@ -13,6 +13,7 @@ from .imbalance import ImbalanceCheck
 from .label_noise import LabelNoiseCheck
 from .leakage import LeakageCheck
 from .outliers import OutliersCheck
+from .temporal import TemporalLeakageCheck
 
 __all__ = [
     "LeakageCheck",
@@ -21,4 +22,5 @@ __all__ = [
     "DuplicatesCheck",
     "ImbalanceCheck",
     "OutliersCheck",
+    "TemporalLeakageCheck",
 ]

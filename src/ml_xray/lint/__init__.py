@@ -31,6 +31,7 @@ from .checks import (
     LabelNoiseCheck,
     LeakageCheck,
     OutliersCheck,
+    TemporalLeakageCheck,
 )
 from .linter import Linter, LintReport
 
@@ -50,4 +51,5 @@ __all__ = [
     "DuplicatesCheck",
     "ImbalanceCheck",
     "OutliersCheck",
+    "TemporalLeakageCheck",
 ]

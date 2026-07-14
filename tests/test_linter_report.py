@@ -14,7 +14,16 @@ from ml_xray.lint.base import default_checks, get_registry
 
 def test_registry_has_all_builtin_checks():
     names = set(get_registry())
-    assert {"leakage", "drift", "label_noise", "duplicates", "imbalance", "outliers"} <= names
+    expected = {
+        "leakage",
+        "drift",
+        "label_noise",
+        "duplicates",
+        "imbalance",
+        "outliers",
+        "temporal_leakage",
+    }
+    assert expected <= names
     assert len(default_checks()) == len(names)
 
 
