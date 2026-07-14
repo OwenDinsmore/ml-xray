@@ -273,6 +273,11 @@ class SliceFinder:
         def evaluate(pred_set: frozenset, mask: np.ndarray) -> None:
             support = int(mask.sum())
             mv = metric(y_true[mask], y_pred[mask], None if proba is None else proba[mask])
+            # Metrics like ROC-AUC are undefined on single-class slices (NaN); a
+            # NaN-metric slice can't be scored, so record it only as visited.
+            if not np.isfinite(mv):
+                tested[pred_set] = {"underperf": float("-inf"), "p_value": 1.0, "mask": mask}
+                return
             delta = mv - baseline
             underperf = (baseline - mv) if metric.greater_is_better else (mv - baseline)
             pval = slice_pvalue(mask, loss, task)

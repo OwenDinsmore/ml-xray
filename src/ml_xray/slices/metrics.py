@@ -21,8 +21,10 @@ from scipy.stats import norm, ttest_ind
 from sklearn.metrics import (
     accuracy_score,
     f1_score,
+    log_loss,
     mean_absolute_error,
     mean_squared_error,
+    roc_auc_score,
 )
 
 __all__ = ["Metric", "resolve_metric", "slice_pvalue", "benjamini_hochberg"]
@@ -35,18 +37,24 @@ class Metric:
     Attributes
     ----------
     name : str
-        Metric name (``"accuracy"``, ``"f1"``, ``"mse"``, ``"mae"``, ``"custom"``).
+        Metric name (``"accuracy"``, ``"f1"``, ``"mse"``, ``"mae"``,
+        ``"roc_auc"``, ``"log_loss"``, ``"custom"``).
     fn : callable
         ``(y_true, y_pred, y_proba) -> float``.
     greater_is_better : bool
         Whether a larger score means a better model on that slice.
+    needs_proba : bool
+        Whether the metric requires ``y_proba``.
     """
 
     name: str
     fn: Callable[..., float]
     greater_is_better: bool
+    needs_proba: bool = False
 
     def __call__(self, y_true, y_pred, y_proba=None) -> float:
+        if self.needs_proba and y_proba is None:
+            raise ValueError(f"metric {self.name!r} requires y_proba")
         return float(self.fn(y_true, y_pred, y_proba))
 
 
@@ -58,11 +66,33 @@ def _f1(y_true, y_pred, _y_proba=None) -> float:
         return float(f1_score(y_true, y_pred, average="macro", zero_division=0))
 
 
+def _roc_auc(y_true, _y_pred, y_proba) -> float:
+    # Undefined when a slice contains a single class -> NaN, which the finder skips.
+    try:
+        proba = np.asarray(y_proba, dtype=float)
+        if proba.ndim == 2 and proba.shape[1] == 2:
+            proba = proba[:, 1]
+        if proba.ndim == 1:
+            return float(roc_auc_score(y_true, proba))
+        return float(roc_auc_score(y_true, proba, multi_class="ovr"))
+    except ValueError:
+        return float("nan")
+
+
+def _log_loss(y_true, _y_pred, y_proba) -> float:
+    try:
+        return float(log_loss(y_true, np.asarray(y_proba, dtype=float)))
+    except ValueError:
+        return float("nan")
+
+
 _BUILTINS: dict[str, Metric] = {
     "accuracy": Metric("accuracy", lambda yt, yp, pp=None: accuracy_score(yt, yp), True),
     "f1": Metric("f1", _f1, True),
     "mse": Metric("mse", lambda yt, yp, pp=None: mean_squared_error(yt, yp), False),
     "mae": Metric("mae", lambda yt, yp, pp=None: mean_absolute_error(yt, yp), False),
+    "roc_auc": Metric("roc_auc", _roc_auc, True, needs_proba=True),
+    "log_loss": Metric("log_loss", _log_loss, False, needs_proba=True),
 }
 
 

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+import pytest
 
 import synthetic
 from ml_xray.slices import (
@@ -98,6 +99,43 @@ def test_resolve_metric_directions():
     assert resolve_metric("mse", None).greater_is_better is False
     assert resolve_metric("auto", "classification").name == "accuracy"
     assert resolve_metric("auto", "regression").name == "mse"
+    assert resolve_metric("roc_auc", None).needs_proba is True
+    assert resolve_metric("log_loss", None).greater_is_better is False
+
+
+def _proba_predictions(seed=0):
+    rng = np.random.default_rng(seed)
+    n = 3000
+    region = rng.choice(["EU", "US", "APAC"], size=n)
+    y = rng.integers(0, 2, n)
+    proba = np.where(y == 1, rng.uniform(0.6, 0.95, n), rng.uniform(0.05, 0.4, n))
+    eu = region == "EU"
+    proba[eu] = rng.uniform(0.4, 0.6, eu.sum())  # uninformative in the weak region
+    y_pred = (proba > 0.5).astype(int)
+    return pd.DataFrame({"region": region}), y, y_pred, proba
+
+
+def test_roc_auc_metric_finds_weak_region():
+    X, y, y_pred, proba = _proba_predictions()
+    report = SliceFinder(metric="roc_auc", min_support=50).fit(X, y, y_pred, proba).report()
+    assert report.metric == "roc_auc"
+    assert report.slices[0].predicate.get("region") == "EU"
+    assert report.slices[0].delta < 0  # lower AUC than baseline
+
+
+def test_log_loss_metric_direction():
+    X, y, y_pred, proba = _proba_predictions()
+    report = SliceFinder(metric="log_loss", min_support=50).fit(X, y, y_pred, proba).report()
+    assert report.metric == "log_loss"
+    assert report.slices[0].predicate.get("region") == "EU"
+    assert report.slices[0].delta > 0  # higher loss than baseline
+
+
+def test_roc_auc_requires_proba():
+    X, y, y_pred, _ = _proba_predictions()
+    finder = SliceFinder(metric="roc_auc", min_support=50)
+    with pytest.raises(ValueError):
+        finder.fit(X, y, y_pred)  # no y_proba supplied
 
 
 def test_benjamini_hochberg_monotone():
