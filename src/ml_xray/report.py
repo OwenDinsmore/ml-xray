@@ -28,6 +28,8 @@ __all__ = [
     "embed_section",
     "slice_bar_figure",
     "embed_projection_figure",
+    "slice_bar_figure_plotly",
+    "embed_projection_figure_plotly",
 ]
 
 _ENV = Environment(autoescape=select_autoescape(["html", "xml"]))
@@ -184,6 +186,7 @@ _SLICE_SECTION = _ENV.from_string("""<div class="summary">
   <span class="pill {{ 'error' if slices else 'ok' }}">{{ slices|length }} slices</span>
 </div>
 <h2>Underperforming slices</h2>
+{% if chart_html %}{{ chart_html }}{% endif %}
 {% if slices %}
 <table>
   <thead><tr>
@@ -208,16 +211,40 @@ _SLICE_SECTION = _ENV.from_string("""<div class="summary">
 """)
 
 
-def slice_section(report: SliceReport) -> str:
-    """Render a slice report as an HTML body fragment."""
+def slice_section(report: SliceReport, *, chart_html: str | None = None) -> str:
+    """Render a slice report as an HTML body fragment.
+
+    Parameters
+    ----------
+    report : SliceReport
+        The report to render.
+    chart_html : str, optional
+        Pre-rendered interactive chart HTML (e.g. a plotly div) to embed above
+        the table.
+    """
+    from markupsafe import Markup
+
     return _SLICE_SECTION.render(
-        metric=report.metric, baseline=report.baseline, slices=report.slices
+        metric=report.metric,
+        baseline=report.baseline,
+        slices=report.slices,
+        chart_html=Markup(chart_html) if chart_html else None,
     )
 
 
-def slice_report_html(report: SliceReport) -> str:
-    """Render a :class:`~ml_xray.slices.finder.SliceReport` to a full HTML document."""
-    return _document("ml-xray — slice discovery report", slice_section(report))
+def slice_report_html(report: SliceReport, *, interactive: bool = False) -> str:
+    """Render a :class:`~ml_xray.slices.finder.SliceReport` to a full HTML document.
+
+    Parameters
+    ----------
+    report : SliceReport
+        The report to render.
+    interactive : bool
+        Embed an interactive plotly bar chart (self-contained) when plotly is
+        installed; silently falls back to the plain table otherwise.
+    """
+    chart = _slice_plotly_div(report) if interactive else None
+    return _document("ml-xray — slice discovery report", slice_section(report, chart_html=chart))
 
 
 # --------------------------------------------------------------------------
@@ -233,7 +260,8 @@ _EMBED_SECTION = _ENV.from_string("""<div class="summary">
 <h2>Embedding diff</h2>
 <p class="subtitle">{{ n_points }} points compared. Overlap 1.0 = local structure
 fully preserved; 0.0 = neighborhoods entirely changed.</p>
-{% if image %}<figure><img src="{{ image }}" alt="before/after projection"></figure>{% endif %}
+{% if chart_html %}{{ chart_html }}
+{% elif image %}<figure><img src="{{ image }}" alt="before/after projection"></figure>{% endif %}
 <h2>Top movers</h2>
 {% if movers %}
 <table>
@@ -249,7 +277,9 @@ fully preserved; 0.0 = neighborhoods entirely changed.</p>
 """)
 
 
-def embed_section(report: EmbedDiffReport, *, image: str | None = None) -> str:
+def embed_section(
+    report: EmbedDiffReport, *, image: str | None = None, chart_html: str | None = None
+) -> str:
     """Render an embedding-diff report as an HTML body fragment.
 
     Parameters
@@ -257,9 +287,13 @@ def embed_section(report: EmbedDiffReport, *, image: str | None = None) -> str:
     report : EmbedDiffReport
         The report to render.
     image : str, optional
-        A ``data:`` URI for the projection scatter to embed inline.
+        A ``data:`` URI for the projection scatter to embed inline (static).
+    chart_html : str, optional
+        Pre-rendered interactive chart HTML (a plotly div); takes precedence
+        over ``image``.
     """
     import numpy as np
+    from markupsafe import Markup
 
     drift = report.per_point_drift
     id_to_drift = {rid: float(drift[i]) for i, rid in enumerate(report.ids)}
@@ -275,10 +309,13 @@ def embed_section(report: EmbedDiffReport, *, image: str | None = None) -> str:
         n_points=int(drift.size),
         movers=movers,
         image=image,
+        chart_html=Markup(chart_html) if chart_html else None,
     )
 
 
-def embed_report_html(report: EmbedDiffReport, *, with_projection: bool = True) -> str:
+def embed_report_html(
+    report: EmbedDiffReport, *, with_projection: bool = True, interactive: bool = False
+) -> str:
     """Render an :class:`~ml_xray.embed.diff.EmbedDiffReport` to a full HTML document.
 
     Parameters
@@ -286,13 +323,23 @@ def embed_report_html(report: EmbedDiffReport, *, with_projection: bool = True) 
     report : EmbedDiffReport
         The report to render.
     with_projection : bool
-        Whether to embed the before/after projection scatter (requires
-        matplotlib; silently omitted if unavailable).
+        Whether to embed the before/after projection scatter.
+    interactive : bool
+        Use an interactive plotly scatter (self-contained) when plotly is
+        installed; otherwise falls back to a static matplotlib PNG, then to no
+        chart.
     """
+    chart = None
     image = None
     if with_projection:
-        image = _projection_data_uri(report)
-    return _document("ml-xray — embedding diff report", embed_section(report, image=image))
+        if interactive:
+            chart = _embed_plotly_div(report)
+        if chart is None:
+            image = _projection_data_uri(report)
+    return _document(
+        "ml-xray — embedding diff report",
+        embed_section(report, image=image, chart_html=chart),
+    )
 
 
 # --------------------------------------------------------------------------
@@ -396,3 +443,141 @@ def _projection_data_uri(report: EmbedDiffReport) -> str | None:
     plt.close(fig)
     encoded = base64.b64encode(buf.getvalue()).decode("ascii")
     return f"data:image/png;base64,{encoded}"
+
+
+# --------------------------------------------------------------------------
+# Optional interactive plotly figures
+# --------------------------------------------------------------------------
+
+
+def _plotly():
+    from ._optional import optional_import
+
+    return optional_import("plotly")
+
+
+def slice_bar_figure_plotly(report: SliceReport):
+    """Return an interactive plotly bar chart of the worst slices' deltas.
+
+    Raises
+    ------
+    ImportError
+        If plotly is not installed.
+    """
+    if _plotly() is None:
+        raise ImportError(
+            'Interactive charts need plotly. Install it with: pip install "ml-xray[viz]"'
+        )
+    import plotly.graph_objects as go
+
+    slices = report.slices[:15][::-1]
+    labels = [s.describe() for s in slices]
+    deltas = [s.delta for s in slices]
+    hover = [
+        f"{s.describe()}<br>support={s.support}<br>{report.metric}={s.metric_value:.4g}"
+        f"<br>delta={s.delta:+.4g}<br>p={s.p_value:.3g}"
+        for s in slices
+    ]
+    fig = go.Figure(
+        go.Bar(
+            x=deltas,
+            y=labels,
+            orientation="h",
+            marker_color=["#b3261e" if d < 0 else "#1e7d34" for d in deltas],
+            hovertext=hover,
+            hoverinfo="text",
+        )
+    )
+    fig.update_layout(
+        title="Worst-performing slices",
+        xaxis_title=f"delta vs baseline ({report.metric})",
+        template="plotly_white",
+        margin=dict(l=10, r=10, t=40, b=10),
+        height=max(260, 30 * len(slices) + 80),
+    )
+    return fig
+
+
+def embed_projection_figure_plotly(report: EmbedDiffReport, *, seed: int = 0):
+    """Return a linked before/after plotly scatter with per-point hover.
+
+    Raises
+    ------
+    ImportError
+        If plotly is not installed.
+    RuntimeError
+        If the source embeddings were not retained on the report.
+    """
+    if _plotly() is None:
+        raise ImportError(
+            'Interactive charts need plotly. Install it with: pip install "ml-xray[viz]"'
+        )
+    if report._emb_a is None or report._emb_b is None:
+        raise RuntimeError("source embeddings were not retained on the report")
+    import plotly.graph_objects as go
+    from plotly.subplots import make_subplots
+
+    from .embed.project import project_2d
+
+    proj_a, proj_b = project_2d(report._emb_a, report._emb_b, projector="auto", seed=seed)
+    drift = report.per_point_drift
+    ids = report.ids
+    fig = make_subplots(rows=1, cols=2, subplot_titles=("A (before)", "B (after)"))
+    for col, proj in ((1, proj_a), (2, proj_b)):
+        fig.add_trace(
+            go.Scatter(
+                x=proj[:, 0],
+                y=proj[:, 1],
+                mode="markers",
+                marker=dict(
+                    color=drift,
+                    colorscale="Magma",
+                    size=6,
+                    showscale=col == 2,
+                    colorbar=dict(title="drift"),
+                ),
+                text=[f"id={i}<br>drift={d:.3f}" for i, d in zip(ids, drift)],
+                hoverinfo="text",
+                showlegend=False,
+            ),
+            row=1,
+            col=col,
+        )
+    fig.update_layout(
+        title="Embedding spaces (colored by per-point drift)",
+        template="plotly_white",
+        margin=dict(l=10, r=10, t=60, b=10),
+    )
+    fig.update_xaxes(showticklabels=False)
+    fig.update_yaxes(showticklabels=False)
+    return fig
+
+
+def _fig_to_div(fig, *, include_js: bool) -> str:
+    """Render a plotly figure to an embeddable HTML div.
+
+    The plotly.js library is inlined (``include_plotlyjs="inline"``) so the report
+    stays self-contained -- it makes no network request to render.
+    """
+    return fig.to_html(
+        full_html=False,
+        include_plotlyjs=("inline" if include_js else False),
+        default_width="100%",
+        config={"displaylogo": False, "responsive": True},
+    )
+
+
+def _slice_plotly_div(report: SliceReport) -> str | None:
+    try:
+        fig = slice_bar_figure_plotly(report)
+    except (ImportError, RuntimeError):
+        return None
+    return _fig_to_div(fig, include_js=True)
+
+
+def _embed_plotly_div(report: EmbedDiffReport) -> str | None:
+    try:
+        fig = embed_projection_figure_plotly(report)
+    except (ImportError, RuntimeError):
+        return None
+    return _fig_to_div(fig, include_js=True)

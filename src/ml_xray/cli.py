@@ -1,8 +1,8 @@
 """Command-line interface: ``ml-xray lint|slices|embed-diff|report``.
 
-Phase 1 implements ``lint`` end-to-end (including a ``--fail-on`` gate for CI).
-The ``slices``, ``embed-diff`` and ``report`` subcommands are wired up but raise
-a clear "not yet implemented" message until their phases land.
+All subcommands are implemented: ``lint`` (with config, baseline diffing, and CI
+gates), ``slices`` (with interactive charts), ``embed-diff`` (with an approximate
+backend and interactive projection), and the unified ``report``.
 """
 
 from __future__ import annotations
@@ -66,6 +66,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_slices.add_argument("--min-support", type=int, default=30, help="Min rows per slice.")
     p_slices.add_argument("--top-k", type=int, default=20, help="Number of slices to report.")
     p_slices.add_argument("--html", default=None, help="Write an HTML report to this path.")
+    p_slices.add_argument(
+        "--interactive", action="store_true", help="Embed an interactive plotly chart in the HTML."
+    )
     p_slices.set_defaults(func=_cmd_slices)
 
     # --- embed-diff -------------------------------------------------------
@@ -74,7 +77,18 @@ def build_parser() -> argparse.ArgumentParser:
     p_embed.add_argument("b", help="Path to embedding matrix B (.npy).")
     p_embed.add_argument("--ids", default=None, help="CSV/TXT of row ids aligning A and B.")
     p_embed.add_argument("-k", type=int, default=10, help="Neighborhood size for k-NN overlap.")
+    p_embed.add_argument(
+        "--backend",
+        default="auto",
+        choices=["auto", "exact", "approx"],
+        help="k-NN backend (approx needs pynndescent).",
+    )
     p_embed.add_argument("--html", default=None, help="Write an HTML report to this path.")
+    p_embed.add_argument(
+        "--interactive",
+        action="store_true",
+        help="Embed an interactive plotly scatter in the HTML.",
+    )
     p_embed.set_defaults(func=_cmd_embed_diff)
 
     # --- report (unified) -------------------------------------------------
@@ -236,7 +250,10 @@ def _cmd_slices(args: argparse.Namespace) -> int:
             f"(delta {s.delta:+.3g}, p={s.p_value:.3g})"
         )
     if args.html:
-        report.to_html(args.html)
+        from .report import slice_report_html
+
+        with open(args.html, "w", encoding="utf-8") as fh:
+            fh.write(slice_report_html(report, interactive=args.interactive))
         print(f"wrote HTML report to {args.html}")
     return 0
 
@@ -261,15 +278,18 @@ def _cmd_embed_diff(args: argparse.Namespace) -> int:
     b = np.load(args.b)
     ids = _load_ids(args.ids, a.shape[0])
 
-    report = EmbeddingDiff(k=args.k).fit(a, b, ids=ids).report()
+    report = EmbeddingDiff(k=args.k, backend=args.backend).fit(a, b, ids=ids).report()
     print(
         f"ml-xray embed-diff: neighbor_overlap={report.neighbor_overlap:.3f} "
         f"cluster_stability(ARI)={report.cluster_stability:.3f} "
-        f"mean_drift={float(report.per_point_drift.mean()):.3f}"
+        f"mean_drift={float(report.per_point_drift.mean()):.3f} backend={report.backend}"
     )
     print("  top movers: " + ", ".join(str(m) for m in report.movers[:10]))
     if args.html:
-        report.to_html(args.html)
+        from .report import embed_report_html
+
+        with open(args.html, "w", encoding="utf-8") as fh:
+            fh.write(embed_report_html(report, interactive=args.interactive))
         print(f"wrote HTML report to {args.html}")
     return 0
 

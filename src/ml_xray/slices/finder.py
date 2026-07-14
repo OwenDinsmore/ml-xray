@@ -119,19 +119,29 @@ class SliceReport:
         with open(path, "w", encoding="utf-8") as fh:
             fh.write(slice_report_html(self))
 
-    def plot(self):
-        """Bar chart of the worst slices via the selected viz backend.
+    def plot(self, *, interactive: bool = False):
+        """Bar chart of the worst slices' deltas.
+
+        Parameters
+        ----------
+        interactive : bool
+            Return an interactive plotly figure (needs plotly) instead of a
+            static matplotlib figure.
 
         Returns
         -------
         object
-            A matplotlib ``Figure`` when matplotlib is available.
+            A plotly or matplotlib ``Figure``.
 
         Raises
         ------
         ImportError
-            If no plotting backend is installed.
+            If the required plotting backend is not installed.
         """
+        if interactive:
+            from ..report import slice_bar_figure_plotly
+
+            return slice_bar_figure_plotly(self)
         from ..report import slice_bar_figure
 
         return slice_bar_figure(self)

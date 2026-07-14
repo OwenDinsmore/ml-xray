@@ -143,26 +143,33 @@ class EmbedDiffReport:
             "movers": list(self.movers),
         }
 
-    def plot_projection(self, seed: int = 0):
-        """Linked before/after 2D scatter via the viz backend.
+    def plot_projection(self, seed: int = 0, *, interactive: bool = False):
+        """Linked before/after 2D scatter of the two embedding spaces.
 
         Parameters
         ----------
         seed : int
             Seed for the projection.
+        interactive : bool
+            Return an interactive plotly figure (needs plotly) with per-point
+            hover instead of a static matplotlib figure.
 
         Returns
         -------
         object
-            A matplotlib ``Figure`` when matplotlib is available.
+            A plotly or matplotlib ``Figure``.
 
         Raises
         ------
         ImportError
-            If no plotting backend is installed.
+            If the required plotting backend is not installed.
         RuntimeError
             If the source embeddings were not retained on the report.
         """
+        if interactive:
+            from ..report import embed_projection_figure_plotly
+
+            return embed_projection_figure_plotly(self, seed=seed)
         from ..report import embed_projection_figure
 
         return embed_projection_figure(self, seed=seed)
